@@ -5,6 +5,7 @@ import type {
   RuleAnalysis,
   RuleProject,
   SampleEvaluation,
+  SampleInput,
   WorkspaceDocument,
 } from '../models/ruleModel';
 import { cloneData, createBlankProject, createDemoWorkspace, createVersionSnapshot, makeId } from '../models/projectFactory';
@@ -104,6 +105,20 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
 
   selectRule(ruleId?: string): void {
     this.updateView({ selectedRuleId: ruleId });
+  }
+
+  /** 把诊断结论里的一组输入直接放进样例推演并立刻求值，复现同一条结论。 */
+  sendToSample(values: SampleInput, expected: string, valid: boolean): void {
+    const project = this.state.project;
+    if (!project) return;
+    const updated = { ...project, sampleInputs: cloneData(values) };
+    // 仅替换样例输入，不触发规则重算，保留当前检查结论用于来回核对。
+    this.replaceProject(updated, expected, false);
+    const evaluation = evaluateSample(updated, values);
+    const notice = valid
+      ? `已把复现输入送进样例推演：${expected}`
+      : `已送进样例推演并触发字段校验：${expected}`;
+    this.updateView({ sampleEvaluation: evaluation, activeModule: 'samples', notice });
   }
 
   renameProject(title: string): void {

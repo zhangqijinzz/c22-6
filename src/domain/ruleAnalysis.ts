@@ -8,6 +8,7 @@ import type {
   SampleInput,
 } from '../models/ruleModel';
 import { matchesRule } from './conditionEvaluator';
+import { explainRuleFindings } from './ruleFindings';
 
 const MAX_CASES = 120_000;
 const MAX_EXAMPLES = 4;
@@ -19,6 +20,7 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
   const visible = new Set<string>();
   const processedMatchSets = new Set<string>();
   const uncoveredExamples: SampleInput[] = [];
+  const shadowWitnesses = new Map<string, SampleInput>();
   const ordered = [...project.rules].sort((a, b) => b.priority - a.priority || project.rules.indexOf(a) - project.rules.indexOf(b));
   let checkedCases = 0;
   let coveredCases = 0;
@@ -41,7 +43,10 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
     }
     checkedCases += 1;
     const matched = ordered.filter((rule) => matchesRule(rule, values));
-    for (const rule of matched) seen.add(rule.id);
+    for (const rule of matched) {
+      seen.add(rule.id);
+      if (rule.id !== matched[0]?.id && !shadowWitnesses.has(rule.id)) shadowWitnesses.set(rule.id, { ...values });
+    }
     if (matched.length) coveredCases += 1;
     else if (uncoveredExamples.length < MAX_EXAMPLES) uncoveredExamples.push({ ...values });
     if (matched[0]) visible.add(matched[0].id);
@@ -70,6 +75,16 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
   const unreachableRuleIds = project.rules.filter((rule) => !seen.has(rule.id)).map((rule) => rule.id);
   const shadowedRuleIds = project.rules.filter((rule) => seen.has(rule.id) && !visible.has(rule.id)).map((rule) => rule.id);
 
+  // 结论基于本次的字段范围与规则顺序现场算出；任何调整都会触发重算。
+  const findings = explainRuleFindings(project, shadowWitnesses)
+    .filter((finding) => finding.kind === 'unreachable'
+      ? unreachableRuleIds.includes(finding.ruleId)
+      : shadowedRuleIds.includes(finding.ruleId))
+    .sort((a, b) => {
+      const order = (id: string): number => project.rules.findIndex((rule) => rule.id === id);
+      return order(a.ruleId) - order(b.ruleId);
+    });
+
   return {
     checkedCases,
     coveredCases,
@@ -77,6 +92,7 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
     overlaps: [...overlaps.values()],
     unreachableRuleIds,
     shadowedRuleIds,
+    findings,
     uncoveredExamples,
     truncated,
   };

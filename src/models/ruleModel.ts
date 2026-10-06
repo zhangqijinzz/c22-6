@@ -79,6 +79,83 @@ export interface MatchWitness {
   ruleIds: string[];
 }
 
+/** 某个字段在当前合法取值范围内的一段范围（用于现场计算出的原因说明）。 */
+export type FieldDomainSnapshot =
+  | { kind: 'number'; min: number; max: number; minInclusive: boolean; maxInclusive: boolean }
+  | { kind: 'enum'; values: string[] }
+  | { kind: 'boolean'; values: boolean[] };
+
+/** 条件里对某字段提出的单个取值要求，保留原文以便界面逐字核对。 */
+export interface RequirementEvidence {
+  fieldId: string;
+  operator: PredicateCondition['operator'];
+  value: ScalarValue;
+  /** operator 为 between 时携带结构化区间，其余情况为空。 */
+  range?: { min: number; max: number };
+  text: string;
+}
+
+/** 一个分支（AND 项）走不通的现场原因。 */
+export type TermCause =
+  | {
+    kind: 'number-gap';
+    fieldId: string;
+    requirements: RequirementEvidence[];
+    legal: Extract<FieldDomainSnapshot, { kind: 'number' }>;
+    lower: { value: number; inclusive: boolean; from: RequirementEvidence } | null;
+    upper: { value: number; inclusive: boolean; from: RequirementEvidence } | null;
+  }
+  | {
+    kind: 'enum-gap';
+    fieldId: string;
+    requirement: RequirementEvidence;
+    legalValues: string[];
+  }
+  | {
+    kind: 'conflict';
+    fieldId: string;
+    fieldType: FieldType;
+    requirements: RequirementEvidence[];
+    legalDomain: FieldDomainSnapshot;
+  };
+
+/** OR 规则中一个永远不成立的 AND 分支。 */
+export interface BlockedTerm {
+  /** 该分支包含的全部条件原文。 */
+  requirements: RequirementEvidence[];
+  causes: TermCause[];
+}
+
+/** 可以直接送进样例推演的输入与预期复现结果。 */
+export interface ReproductionInput {
+  values: SampleInput;
+  valid: boolean;
+  invalidFieldIds: string[];
+  expected: string;
+}
+
+/** 遮蔽关系中的一段输入范围。 */
+export interface ShadowSegment {
+  range: Record<string, FieldDomainSnapshot>;
+  byRuleId: string;
+  witness: SampleInput;
+}
+
+export type RuleFinding =
+  | {
+    kind: 'unreachable';
+    ruleId: string;
+    blockedTerms: BlockedTerm[];
+    repro: ReproductionInput;
+  }
+  | {
+    kind: 'shadowed';
+    ruleId: string;
+    segments: ShadowSegment[];
+    truncated: boolean;
+    repro: ReproductionInput;
+  };
+
 export interface RuleOverlap {
   ruleAId: string;
   ruleBId: string;
@@ -93,6 +170,8 @@ export interface RuleAnalysis {
   overlaps: RuleOverlap[];
   unreachableRuleIds: string[];
   shadowedRuleIds: string[];
+  /** 针对当前字段范围与规则集合现场算出的、带证据的诊断结论。 */
+  findings: RuleFinding[];
   uncoveredExamples: SampleInput[];
   truncated: boolean;
 }

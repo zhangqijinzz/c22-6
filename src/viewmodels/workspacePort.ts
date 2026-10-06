@@ -1,4 +1,4 @@
-import type { ModuleId, RuleProject } from '../models/ruleModel';
+import type { ModuleId, RuleProject, SampleInput } from '../models/ruleModel';
 import type { WorkspaceState } from './workspaceViewModel';
 
 export interface WorkspacePort {
@@ -7,4 +7,5 @@ export interface WorkspacePort {
   updateView(patch: Partial<WorkspaceState>): void;
   navigate(module: ModuleId): void;
   selectRule(ruleId?: string): void;
+  sendToSample(values: SampleInput, expected: string, valid: boolean): void;
 }

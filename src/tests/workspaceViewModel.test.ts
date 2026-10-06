@@ -101,4 +101,33 @@ describe('RuleWorkspaceViewModel', () => {
     expect(workspace.getSnapshot().project?.fields).toHaveLength(3);
     workspace.dispose();
   });
+
+  it('sends a finding replay input straight into the sample evaluation without invalidating the analysis', async () => {
+    const workspace = new RuleWorkspaceViewModel(new MemoryRepository(), new FakeChecker());
+    await workspace.start();
+    await vi.advanceTimersByTimeAsync(50);
+    const analysis = workspace.getSnapshot().analysis;
+    expect(analysis).not.toBeNull();
+
+    const unreachable = analysis?.findings.find((finding) => finding.ruleId === 'rule-out-of-range');
+    expect(unreachable?.kind).toBe('unreachable');
+    if (unreachable?.kind !== 'unreachable') return;
+    workspace.sendToSample(unreachable.repro.values, unreachable.repro.expected, unreachable.repro.valid);
+    let snapshot = workspace.getSnapshot();
+    expect(snapshot.activeModule).toBe('samples');
+    expect(snapshot.project?.sampleInputs['cart-total']).toBe(5001);
+    expect(snapshot.sampleEvaluation?.valid).toBe(false);
+    expect(snapshot.sampleEvaluation?.errors.join('')).toContain('订单金额');
+    expect(snapshot.analysis).toBe(analysis);
+
+    const shadowed = analysis?.findings.find((finding) => finding.ruleId === 'rule-gold-hidden');
+    expect(shadowed?.kind).toBe('shadowed');
+    if (shadowed?.kind !== 'shadowed') return;
+    workspace.sendToSample(shadowed.repro.values, shadowed.repro.expected, shadowed.repro.valid);
+    snapshot = workspace.getSnapshot();
+    expect(snapshot.sampleEvaluation?.valid).toBe(true);
+    expect(snapshot.sampleEvaluation?.winner?.id).toBe('rule-gold-discount');
+    expect(snapshot.sampleEvaluation?.matchedRules.map((rule) => rule.id)).toContain('rule-gold-hidden');
+    workspace.dispose();
+  });
 });
