@@ -1,3 +1,4 @@
+import type { SampleInput } from '../../models/ruleModel';
 import type { RuleWorkspaceViewModel } from '../../viewmodels/workspaceViewModel';
 
 export class InspectionViewModel {
@@ -9,6 +10,10 @@ export class InspectionViewModel {
 
   cancel(): void {
     this.workspace.cancelCheck();
+  }
+
+  replaySample(values: SampleInput): void {
+    this.workspace.replaySample(values);
   }
 
   saveVersion(): void {

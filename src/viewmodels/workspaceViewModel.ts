@@ -1,10 +1,11 @@
-import { evaluateSample } from '../domain/conditionEvaluator';
+import { defaultSample, evaluateSample } from '../domain/conditionEvaluator';
 import { ruleDomain } from '../domain/ruleDomain';
 import type {
   ModuleId,
   RuleAnalysis,
   RuleProject,
   SampleEvaluation,
+  SampleInput,
   WorkspaceDocument,
 } from '../models/ruleModel';
 import { cloneData, createBlankProject, createDemoWorkspace, createVersionSnapshot, makeId } from '../models/projectFactory';
@@ -152,6 +153,14 @@ export class RuleWorkspaceViewModel implements WorkspacePort {
     if (this.state.checkStatus === 'checking' || this.state.checkStatus === 'scheduled') {
       this.publish({ ...this.state, phase: 'editing', checkStatus: 'cancelled', notice: '检查已取消' });
     }
+  }
+
+  replaySample(values: SampleInput): void {
+    const project = this.state.project;
+    if (!project) return;
+    const sampleInputs: SampleInput = { ...defaultSample(project.fields), ...values };
+    const committed = this.commitProject({ ...project, sampleInputs }, '已将检查样例送入样例推演，可对照命中路径核对结论', { recheck: false });
+    if (committed) this.updateView({ activeModule: 'samples' });
   }
 
   createProject(): void {

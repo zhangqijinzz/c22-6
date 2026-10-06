@@ -101,4 +101,22 @@ describe('RuleWorkspaceViewModel', () => {
     expect(workspace.getSnapshot().project?.fields).toHaveLength(3);
     workspace.dispose();
   });
+
+  it('replays a shadowing witness in the sample lab and reproduces the same winner', async () => {
+    const workspace = new RuleWorkspaceViewModel(new MemoryRepository(), new FakeChecker());
+    await workspace.start();
+    await vi.advanceTimersByTimeAsync(50);
+    const analysis = workspace.getSnapshot().analysis;
+    expect(analysis?.unreachableReasons[0]?.cause?.blocker?.kind).toBe('out-of-domain');
+    const reason = analysis?.shadowedReasons[0];
+    expect(reason?.segments[0]?.winnerRuleId).toBe('rule-gold-discount');
+
+    workspace.replaySample(reason?.segments[0]?.witness ?? {});
+    const state = workspace.getSnapshot();
+    expect(state.activeModule).toBe('samples');
+    expect(state.project?.sampleInputs).toMatchObject(reason?.segments[0]?.witness ?? {});
+    expect(state.sampleEvaluation?.winner?.id).toBe('rule-gold-discount');
+    expect(state.sampleEvaluation?.matchedRules.some((rule) => rule.id === reason?.ruleId)).toBe(true);
+    workspace.dispose();
+  });
 });

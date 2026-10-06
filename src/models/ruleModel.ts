@@ -86,6 +86,43 @@ export interface RuleOverlap {
   witness: SampleInput;
 }
 
+export interface ConditionBlocker {
+  kind: 'out-of-domain' | 'contradiction';
+  fieldId: string;
+  conditions: PredicateCondition[];
+}
+
+export interface UnreachableCause {
+  blocker?: ConditionBlocker;
+  branches?: UnreachableCause[];
+}
+
+export interface UnreachableReason {
+  ruleId: string;
+  cause?: UnreachableCause;
+  probe?: SampleInput;
+}
+
+export interface FieldSpan {
+  fieldId: string;
+  min?: number;
+  max?: number;
+  values?: ScalarValue[];
+}
+
+export interface ShadowSegment {
+  winnerRuleId: string;
+  matchedCases: number;
+  span: FieldSpan[];
+  witness: SampleInput;
+}
+
+export interface ShadowedReason {
+  ruleId: string;
+  matchedCases: number;
+  segments: ShadowSegment[];
+}
+
 export interface RuleAnalysis {
   checkedCases: number;
   coveredCases: number;
@@ -93,6 +130,8 @@ export interface RuleAnalysis {
   overlaps: RuleOverlap[];
   unreachableRuleIds: string[];
   shadowedRuleIds: string[];
+  unreachableReasons: UnreachableReason[];
+  shadowedReasons: ShadowedReason[];
   uncoveredExamples: SampleInput[];
   truncated: boolean;
 }

@@ -1,4 +1,6 @@
 import type {
+  BusinessRule,
+  FieldSpan,
   MatchWitness,
   RuleAnalysis,
   RuleCondition,
@@ -6,11 +8,32 @@ import type {
   RuleOverlap,
   RuleProject,
   SampleInput,
+  ScalarValue,
+  ShadowSegment,
+  ShadowedReason,
+  UnreachableReason,
 } from '../models/ruleModel';
 import { matchesRule } from './conditionEvaluator';
+import { explainUnreachable } from './reachability';
 
 const MAX_CASES = 120_000;
 const MAX_EXAMPLES = 4;
+const MAX_SPAN_VALUES = 16;
+
+type SpanAccum =
+  | { kind: 'number'; min: number; max: number }
+  | { kind: 'set'; values: Set<ScalarValue> };
+
+interface ShadowWinnerAccum {
+  count: number;
+  witness: SampleInput;
+  spans: Map<string, SpanAccum>;
+}
+
+interface ShadowRuleAccum {
+  matched: number;
+  winners: Map<string, ShadowWinnerAccum>;
+}
 
 export function analyzeRules(project: RuleProject): RuleAnalysis {
   const candidates = project.fields.map((field) => valuesForField(field, project));
@@ -19,6 +42,7 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
   const visible = new Set<string>();
   const processedMatchSets = new Set<string>();
   const uncoveredExamples: SampleInput[] = [];
+  const shadowStats = new Map<string, ShadowRuleAccum>();
   const ordered = [...project.rules].sort((a, b) => b.priority - a.priority || project.rules.indexOf(a) - project.rules.indexOf(b));
   let checkedCases = 0;
   let coveredCases = 0;
@@ -44,7 +68,12 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
     for (const rule of matched) seen.add(rule.id);
     if (matched.length) coveredCases += 1;
     else if (uncoveredExamples.length < MAX_EXAMPLES) uncoveredExamples.push({ ...values });
-    if (matched[0]) visible.add(matched[0].id);
+    if (matched[0]) {
+      visible.add(matched[0].id);
+      for (let index = 1; index < matched.length; index += 1) {
+        recordShadow(shadowStats, matched[index], matched[0], values, project.fields);
+      }
+    }
     const matchSetKey = matched.length > 1 ? matched.map((rule) => rule.id).sort().join('|') : '';
     if (matched.length > 1 && !processedMatchSets.has(matchSetKey)) {
       processedMatchSets.add(matchSetKey);
@@ -69,6 +98,8 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
   visit(0, {});
   const unreachableRuleIds = project.rules.filter((rule) => !seen.has(rule.id)).map((rule) => rule.id);
   const shadowedRuleIds = project.rules.filter((rule) => seen.has(rule.id) && !visible.has(rule.id)).map((rule) => rule.id);
+  const unreachableReasons = buildUnreachableReasons(project, unreachableRuleIds);
+  const shadowedReasons = buildShadowedReasons(project, shadowedRuleIds, shadowStats);
 
   return {
     checkedCases,
@@ -77,9 +108,91 @@ export function analyzeRules(project: RuleProject): RuleAnalysis {
     overlaps: [...overlaps.values()],
     unreachableRuleIds,
     shadowedRuleIds,
+    unreachableReasons,
+    shadowedReasons,
     uncoveredExamples,
     truncated,
   };
+}
+
+function buildUnreachableReasons(project: RuleProject, ruleIds: string[]): UnreachableReason[] {
+  return ruleIds.map((ruleId) => {
+    const rule = project.rules.find((candidate) => candidate.id === ruleId);
+    const explanation = rule ? explainUnreachable(rule, project.fields) : {};
+    return { ruleId, cause: explanation.cause, probe: explanation.probe };
+  });
+}
+
+function buildShadowedReasons(
+  project: RuleProject,
+  ruleIds: string[],
+  stats: Map<string, ShadowRuleAccum>,
+): ShadowedReason[] {
+  return ruleIds.map((ruleId) => {
+    const entry = stats.get(ruleId);
+    const segments: ShadowSegment[] = [...(entry?.winners.entries() ?? [])]
+      .map(([winnerRuleId, accum]) => ({
+        winnerRuleId,
+        matchedCases: accum.count,
+        span: project.fields
+          .map((field) => toFieldSpan(field, accum.spans.get(field.id)))
+          .filter((span): span is FieldSpan => span !== null),
+        witness: accum.witness,
+      }))
+      .sort((a, b) => b.matchedCases - a.matchedCases);
+    return { ruleId, matchedCases: entry?.matched ?? 0, segments };
+  });
+}
+
+function recordShadow(
+  stats: Map<string, ShadowRuleAccum>,
+  rule: BusinessRule,
+  winner: BusinessRule,
+  values: SampleInput,
+  fields: RuleField[],
+): void {
+  let entry = stats.get(rule.id);
+  if (!entry) {
+    entry = { matched: 0, winners: new Map() };
+    stats.set(rule.id, entry);
+  }
+  entry.matched += 1;
+  let accum = entry.winners.get(winner.id);
+  if (!accum) {
+    accum = { count: 0, witness: { ...values }, spans: new Map() };
+    entry.winners.set(winner.id, accum);
+  }
+  accum.count += 1;
+  for (const field of fields) {
+    const value = values[field.id];
+    if (value === undefined || value === '') continue;
+    let span = accum.spans.get(field.id);
+    if (!span) {
+      span = field.type === 'number'
+        ? { kind: 'number', min: Infinity, max: -Infinity }
+        : { kind: 'set', values: new Set<ScalarValue>() };
+      accum.spans.set(field.id, span);
+    }
+    if (span.kind === 'number' && typeof value === 'number') {
+      span.min = Math.min(span.min, value);
+      span.max = Math.max(span.max, value);
+    } else if (span.kind === 'set' && span.values.size < MAX_SPAN_VALUES) {
+      span.values.add(value);
+    }
+  }
+}
+
+function toFieldSpan(field: RuleField, span: SpanAccum | undefined): FieldSpan | null {
+  if (!span) return null;
+  if (span.kind === 'number') {
+    const min = field.min ?? 0;
+    const max = field.max ?? min;
+    if (span.min <= min && span.max >= max) return null;
+    return { fieldId: field.id, min: span.min, max: span.max };
+  }
+  const legalCount = field.type === 'boolean' ? 2 : (field.enumValues ?? []).length;
+  if (span.values.size >= legalCount) return null;
+  return { fieldId: field.id, values: [...span.values] };
 }
 
 type ScalarCandidate = string | number | boolean;
